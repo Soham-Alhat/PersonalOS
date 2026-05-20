@@ -2,10 +2,10 @@ import os
 import sys
 import pathlib
 import requests
-from datetime import date, datetime, timezone
+from datetime import date
 
 sys.path.append(str(pathlib.Path(__file__).parent.parent))
-from scripts.supabase_client import get_supabase, get_config, set_config
+from scripts.supabase_client import get_supabase, get_config
 
 
 def get_telegram_creds():
@@ -31,10 +31,24 @@ def send_telegram(message: str):
     )
 
 
-def check_and_nudge():
-    supa   = get_supabase()
-    today  = date.today().isoformat()
-    target = int(get_config("daily_task_target"))
+def already_journaled_today() -> bool:
+    supa  = get_supabase()
+    today = date.today().isoformat()
+    resp  = (supa.table("journal")
+             .select("id")
+             .eq("entry_date", today)
+             .execute())
+    return len(resp.data) > 0
+
+
+def run():
+    if already_journaled_today():
+        print("Already journaled today. Skipping prompt.")
+        return
+
+    supa    = get_supabase()
+    target  = get_config("daily_task_target")
+    today   = date.today().isoformat()
 
     outcomes = (supa.table("outcomes")
                 .select("result")
@@ -43,16 +57,19 @@ def check_and_nudge():
 
     completed = sum(1 for o in outcomes if o.get("result") == "completed")
 
-    if completed == 0:
-        send_telegram(
-            f"⚡ *Midday nudge*\n\n"
-            f"No tasks logged yet today. Target: *{target}*\n\n"
-            f"Use `/done 1` when you complete something."
-        )
-        print("Nudge sent — no tasks logged yet.")
-    else:
-        print(f"Already logged {completed} tasks. No nudge needed.")
+    send_telegram(f"""🌙 *Evening Check-in*
+
+You completed *{completed}/{target}* tasks today.
+
+Reply with `/journal your entry | mood(1-5)` to log your day.
+
+Example:
+`/journal Solved sliding window problems, struggled with edge cases | 3`
+
+_Takes 30 seconds. Worth every day._""")
+
+    print("Evening journal prompt sent.")
 
 
 if __name__ == "__main__":
-    check_and_nudge()
+    run()
