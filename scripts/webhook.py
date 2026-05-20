@@ -62,13 +62,20 @@ def handle_status():
 
 def handle_done(amount: int):
     supa = get_supabase()
+    now  = datetime.now(timezone.utc)
+
     for _ in range(amount):
         supa.table("outcomes").insert({
-            "result"     : "completed",
-            "logged_at"  : datetime.now(timezone.utc).isoformat()
+            "result"      : "completed",
+            "hour_of_day" : now.hour,
+            "day_of_week" : now.strftime("%A"),
+            "logged_at"   : now.isoformat()
         }).execute()
 
     streak = int(get_config("current_streak")) + 1
+    longest = int(get_config("longest_streak"))
+    if streak > longest:
+        set_config("longest_streak", str(streak))
     set_config("current_streak", str(streak))
 
     send_telegram(f"✅ Logged *{amount}* task(s) completed. Streak: *{streak} days*. Keep going.")
@@ -76,25 +83,31 @@ def handle_done(amount: int):
 
 def handle_failed(reason: str = ""):
     supa = get_supabase()
+    now  = datetime.now(timezone.utc)
+
     supa.table("outcomes").insert({
         "result"        : "failed",
         "failure_reason": reason if reason else "unspecified",
-        "logged_at"     : datetime.now(timezone.utc).isoformat()
+        "hour_of_day"   : now.hour,
+        "day_of_week"   : now.strftime("%A"),
+        "logged_at"     : now.isoformat()
     }).execute()
 
     send_telegram(f"❌ Task logged as failed. Reason: _{reason if reason else 'not specified'}_\nUse /skip to reschedule your session.")
 
-
 def handle_skip():
     supa = get_supabase()
+    now  = datetime.now(timezone.utc)
+
     supa.table("outcomes").insert({
         "result"        : "failed",
         "failure_reason": "skipped",
-        "logged_at"     : datetime.now(timezone.utc).isoformat()
+        "hour_of_day"   : now.hour,
+        "day_of_week"   : now.strftime("%A"),
+        "logged_at"     : now.isoformat()
     }).execute()
 
-    send_telegram("⏭️ Session skipped and logged. Reschedule flow coming in v2.\nFocus on tomorrow — streak protection active.")
-
+    send_telegram("⏭️ Session skipped and logged.\nFocus on tomorrow — streak protection active.")
 
 def handle_weak():
     supa = get_supabase()
