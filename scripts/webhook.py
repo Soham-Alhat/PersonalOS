@@ -195,7 +195,7 @@ async def telegram_webhook(request: Request):
             parts  = text.split(maxsplit=1)
             reason = parts[1] if len(parts) > 1 else ""
             handle_failed(reason)
-        elif text == "/skip":
+        elif text.startswith("/skip"):
             handle_skip()
         elif text == "/weak":
             handle_weak()
