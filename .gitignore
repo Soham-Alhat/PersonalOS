@@ -1,5 +1,11 @@
 dashboard/.streamlit/secrets.toml
 .env
+
 __pycache__/
 *.pyc
 .venv/
+*.py[cod]
+*.pyo
+
+node_modules/
+npm-debug/log*
