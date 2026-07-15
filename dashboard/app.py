@@ -460,6 +460,49 @@ if not profile_df.empty and len(profile_df) > 0:
         use_container_width=True, height=180
     )
 
+# ── DANGER ZONE — RESET ALL PROGRESS ─────────────────────────────────────
+st.divider()
+st.subheader("⚠️ Danger Zone")
+ 
+TABLES_TO_RESET = ["outcomes", "journal", "weekly_reviews", "behavioral_profile"]
+ 
+def reset_all_progress():
+    supa = get_db()
+    results = {}
+    for table in TABLES_TO_RESET:
+        try:
+            supa.table(table).delete().neq("id", 0).execute()
+            results[table] = "cleared"
+        except Exception as e:
+            results[table] = f"error: {e}"
+    # also reset streak counters back to zero
+    try:
+        from scripts.supabase_client import set_config
+        set_config("current_streak", "0")
+        set_config("longest_streak", "0")
+        results["streak_config"] = "reset"
+    except Exception as e:
+        results["streak_config"] = f"error: {e}"
+    return results
+ 
+with st.expander("Reset all progress"):
+    st.warning(
+        "This permanently deletes ALL data: tasks/outcomes, journal entries, "
+        "weekly reviews, behavioral profile, and resets your streak to 0. "
+        "This cannot be undone."
+    )
+    confirm_check = st.checkbox("I understand this is permanent")
+    confirm_text = st.text_input('Type "RESET" to confirm')
+ 
+    if st.button("Reset All Progress", type="primary", disabled=not confirm_check):
+        if confirm_text == "RESET":
+            outcome = reset_all_progress()
+            st.success("Reset complete:")
+            st.json(outcome)
+            st.cache_data.clear()
+        else:
+            st.error('You must type "RESET" exactly to confirm.')
+
 # ── FOOTER ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="margin-top:40px;padding-top:16px;border-top:1px solid #1A1A22;
