@@ -12,4 +12,4 @@ jobs:
     steps:
       - name: Ping App 1
         run: |
-          curl -s -o /dev/null -w "App 1 -> %{http_code}\n" https://personalos-3nehhfdyshqvahbazrn2lr.streamlit.app/ || true
+          curl -v https://personalos-3nehhfdyshqvahbazrn2lr.streamlit.app/
