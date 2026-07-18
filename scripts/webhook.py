@@ -2,6 +2,7 @@ import os
 import sys
 import pathlib
 import requests
+import uuid
 from fastapi import FastAPI, Request
 from datetime import date, datetime, timezone
 
@@ -26,22 +27,22 @@ def get_telegram_creds():
     return token, chat_id
 
 
-def send_telegram(message: str):
+def send(message: str):
     token, chat_id = get_telegram_creds()
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, json={
-        "chat_id"   : chat_id,
-        "text"      : message,
-        "parse_mode": "Markdown"
-    })
+    requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+    )
 
+
+# ── HANDLERS ───────────────────────────────────────────────────────────────
 
 def handle_status():
-    streak      = get_config("current_streak")
-    target      = get_config("daily_task_target")
-    topic       = get_config("weekly_topic")
-    placement   = get_config("placement_date")
-    days_left   = (date.fromisoformat(placement) - date.today()).days
+    streak    = get_config("current_streak")
+    target    = get_config("daily_task_target")
+    topic     = get_config("weekly_topic")
+    placement = get_config("placement_date")
+    days_left = (date.fromisoformat(placement) - date.today()).days
 
     supa  = get_supabase()
     today = date.today().isoformat()
@@ -49,15 +50,20 @@ def handle_status():
                       .select("result")
                       .gte("logged_at", today)
                       .execute()).data or []
+    done = sum(1 for o in outcomes_today if o.get("result") == "completed")
 
-    completed_today = sum(1 for o in outcomes_today if o.get("result") == "completed")
+    remaining = int(target) - done
+    remaining_txt = (f"{remaining} left to hit target" if remaining > 0
+                     else "Target hit for today, sir")
 
-    send_telegram(f"""📊 *Status — {date.today().strftime('%A')}*
+    send(f"""📋 *Here's where you stand, sir*
 
-✅ Done today: *{completed_today}/{target}*
+✅ Done today: *{done}* of *{target}*
 🔥 Streak: *{streak} days*
-📅 Days to placement: *{days_left}*
-📚 Focus: *{topic}*""")
+📅 Placement: *{days_left} days away*
+📚 Focus: *{topic}*
+
+_{remaining_txt}_""")
 
 
 def handle_done(amount: int):
@@ -72,13 +78,20 @@ def handle_done(amount: int):
             "logged_at"   : now.isoformat()
         }).execute()
 
-    streak = int(get_config("current_streak")) + 1
+    streak  = int(get_config("current_streak")) + 1
     longest = int(get_config("longest_streak"))
     if streak > longest:
         set_config("longest_streak", str(streak))
     set_config("current_streak", str(streak))
 
-    send_telegram(f"✅ Logged *{amount}* task(s) completed. Streak: *{streak} days*. Keep going.")
+    remarks = {
+        1: "One down. Onwards.",
+        2: "Two done. The momentum is yours.",
+        3: "Three. That's a full day's work, sir.",
+    }
+    remark = remarks.get(amount, f"All {amount} logged.")
+
+    send(f"✅ {remark}\n🔥 Streak now at *{streak} days*.")
 
 
 def handle_failed(reason: str = ""):
@@ -93,7 +106,9 @@ def handle_failed(reason: str = ""):
         "logged_at"     : now.isoformat()
     }).execute()
 
-    send_telegram(f"❌ Task logged as failed. Reason: _{reason if reason else 'not specified'}_\nUse /skip to reschedule your session.")
+    reason_line = f"Noted: _{reason}_" if reason else "No reason given — that's fine."
+    send(f"📝 Logged.\n{reason_line}\n\nEven the best days have misses, sir.")
+
 
 def handle_skip():
     supa = get_supabase()
@@ -107,7 +122,106 @@ def handle_skip():
         "logged_at"     : now.isoformat()
     }).execute()
 
-    send_telegram("⏭️ Session skipped and logged.\nFocus on tomorrow — streak protection active.")
+    send("⏭️ Session logged as skipped.\n_Tomorrow is already waiting, sir._")
+
+
+def handle_add(text: str):
+    supa   = get_supabase()
+    parts  = [p.strip() for p in text.split("|")]
+    name   = parts[0]
+    priority = parts[1].lower() if len(parts) > 1 else "medium"
+    deadline = parts[2] if len(parts) > 2 else None
+
+    if not name:
+        send("Tell me what to add, sir. Format:\n`/add task name | priority | deadline`")
+        return
+
+    valid_priorities = ["urgent", "high", "medium", "low"]
+    if priority not in valid_priorities:
+        priority = "medium"
+
+    task_id = str(uuid.uuid4())[:8]
+    supa.table("tasks").insert({
+        "task_id"   : task_id,
+        "name"      : name,
+        "priority"  : priority,
+        "deadline"  : deadline,
+        "status"    : "pending",
+        "category"  : "manual",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }).execute()
+
+    priority_icons = {"urgent": "🚨", "high": "🔴", "medium": "🟡", "low": "🟢"}
+    icon = priority_icons.get(priority, "🟡")
+
+    msg = f"📌 Added to your list, sir.\n\n{icon} *{name}*\nPriority: {priority}"
+    if deadline:
+        msg += f"\nDeadline: {deadline}"
+    send(msg)
+
+
+def handle_remove(name_fragment: str):
+    supa  = get_supabase()
+    tasks = (supa.table("tasks")
+             .select("*")
+             .eq("status", "pending")
+             .execute()).data or []
+
+    matches = [t for t in tasks
+               if name_fragment.lower() in t.get("name", "").lower()]
+
+    if not matches:
+        send(f"No pending task matching *{name_fragment}*, sir.")
+        return
+
+    t = matches[0]
+    supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
+    send(f"🗑️ Removed from your list, sir.\n_{t['name']}_")
+
+
+def handle_list():
+    supa  = get_supabase()
+    tasks = (supa.table("tasks")
+             .select("*")
+             .eq("status", "pending")
+             .order("created_at", desc=False)
+             .execute()).data or []
+
+    if not tasks:
+        send("Your list is clear, sir. Nothing pending.")
+        return
+
+    priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+    tasks = sorted(tasks, key=lambda x: priority_order.get(x.get("priority", "low"), 3))
+
+    icons = {"urgent": "🚨", "high": "🔴", "medium": "🟡", "low": "🟢"}
+    lines = []
+    for i, t in enumerate(tasks, 1):
+        icon     = icons.get(t.get("priority", "medium"), "🟡")
+        deadline = f" · _{t['deadline']}_" if t.get("deadline") else ""
+        lines.append(f"{i}. {icon} {t.get('name','')}{deadline}")
+
+    send(f"📋 *Your pending tasks, sir:*\n\n" + "\n".join(lines))
+
+
+def handle_done_task(name_fragment: str):
+    supa  = get_supabase()
+    tasks = (supa.table("tasks")
+             .select("*")
+             .eq("status", "pending")
+             .execute()).data or []
+
+    matches = [t for t in tasks
+               if name_fragment.lower() in t.get("name", "").lower()]
+
+    if not matches:
+        send(f"No task matching *{name_fragment}* on the list, sir.")
+        return
+
+    t = matches[0]
+    supa.table("tasks").update({"status": "done"}).eq("task_id", t["task_id"]).execute()
+    send(f"✅ *{t['name']}* — marked done.\n_Well done, sir._")
+
 
 def handle_weak():
     supa = get_supabase()
@@ -117,45 +231,33 @@ def handle_weak():
             .execute())
     data = resp.data or []
 
-    reasons = [r["failure_reason"] for r in data if r.get("failure_reason")]
+    reasons = [r["failure_reason"] for r in data
+               if r.get("failure_reason") and r["failure_reason"] != "unspecified"]
+
     if not reasons:
-        send_telegram("No failure data yet. Start logging tasks with /done and /failed.")
+        send("No failure patterns yet, sir. Keep logging with /failed.")
         return
 
     from collections import Counter
-    counts  = Counter(reasons).most_common(3)
-    lines   = "\n".join([f"• {r}: {c} times" for r, c in counts])
-    send_telegram(f"🔍 *Your top failure reasons:*\n{lines}")
+    counts = Counter(reasons).most_common(3)
+    lines  = [f"• *{r}* — {c} {'time' if c == 1 else 'times'}" for r, c in counts]
 
-
-def handle_journal(text: str):
-    supa  = get_supabase()
-    today = date.today().isoformat()
-
-    parts = [p.strip() for p in text.split("|")]
-    mood  = None
-    if len(parts) >= 2:
-        try:
-            mood = int(parts[-1])
-            text = "|".join(parts[:-1])
-        except ValueError:
-            pass
-
-    supa.table("journal").upsert({
-        "entry_date"        : today,
-        "entry"             : text,
-        "mood"              : mood,
-        "logged_via"        : "telegram",
-        "logged_at"         : datetime.now(timezone.utc).isoformat()
-    }, on_conflict="entry_date").execute()
-
-    send_telegram(f"📓 Journal logged for today. Mood: *{mood}/5*" if mood else "📓 Journal entry saved.")
+    send("🔍 *Your top failure reasons, sir:*\n\n" + "\n".join(lines)
+         + "\n\n_Awareness is the first step._")
 
 
 def handle_streak():
     streak  = get_config("current_streak")
     longest = get_config("longest_streak")
-    send_telegram(f"🔥 Current streak: *{streak} days*\n🏆 Longest streak: *{longest} days*")
+
+    if int(streak) == 0:
+        msg = "No active streak yet, sir. Today is a good day to start."
+    elif int(streak) >= int(longest):
+        msg = f"🔥 *{streak} days* — and that's your best ever. Keep going."
+    else:
+        msg = f"🔥 *{streak} days* active · Best ever: *{longest} days*"
+
+    send(msg)
 
 
 def handle_score():
@@ -167,11 +269,74 @@ def handle_score():
             .execute())
 
     if resp.data:
-        row = resp.data[0]
-        send_telegram(f"🧠 *Readiness score — {row['week_label']}*\n*{row['readiness_score']}/100*")
-    else:
-        send_telegram("No weekly score yet. Run /weekly after logging some tasks.")
+        row   = resp.data[0]
+        score = row['readiness_score']
+        week  = row['week_label']
 
+        if score >= 80:
+            verdict = "Excellent. You're on track, sir."
+        elif score >= 60:
+            verdict = "Solid. A few adjustments and you'll be there."
+        elif score >= 40:
+            verdict = "Room to grow. Let's pick up the pace, sir."
+        else:
+            verdict = "Early days. Consistency is all that matters right now."
+
+        send(f"🧠 *Readiness — {week}*\n\n*{score}/100*\n\n_{verdict}_")
+    else:
+        send("No score yet, sir. Run the week out and check back Sunday.")
+
+
+def handle_journal(text: str):
+    supa  = get_supabase()
+    today = date.today().isoformat()
+    parts = [p.strip() for p in text.split("|")]
+    mood  = None
+
+    if len(parts) >= 2:
+        try:
+            mood = int(parts[-1])
+            text = "|".join(parts[:-1]).strip()
+        except ValueError:
+            pass
+
+    supa.table("journal").upsert({
+        "entry_date": today,
+        "entry"     : text,
+        "mood"      : mood,
+        "logged_via": "telegram",
+        "logged_at" : datetime.now(timezone.utc).isoformat()
+    }, on_conflict="entry_date").execute()
+
+    mood_line = f"\nMood logged: *{mood}/5*" if mood else ""
+    send(f"📓 Journal saved, sir.{mood_line}\n_Every entry counts._")
+
+
+def handle_help():
+    send("""🤵 *At your service, sir.*
+
+*Logging*
+`/done 2` — log 2 tasks complete
+`/failed low energy` — log a failure
+`/skip` — skip today's session
+`/journal your entry | mood` — log your day
+
+*Tasks*
+`/add name | priority | deadline` — add a task
+`/list` — see all pending tasks
+`/remove name` — remove a task
+`/finish name` — mark a task done
+
+*Intel*
+`/status` — today's overview
+`/streak` — current streak
+`/score` — readiness score
+`/weak` — your failure patterns
+
+_Priority options: urgent · high · medium · low_""")
+
+
+# ── ROUTER ─────────────────────────────────────────────────────────────────
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
@@ -187,38 +352,38 @@ async def telegram_webhook(request: Request):
 
         if text == "/status":
             handle_status()
-        elif text.startswith("/done"):
+        elif text.startswith("/done "):
             parts  = text.split()
-            amount = int(parts[1]) if len(parts) > 1 else 1
+            amount = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
             handle_done(amount)
+        elif text == "/done":
+            handle_done(1)
         elif text.startswith("/failed"):
             parts  = text.split(maxsplit=1)
             reason = parts[1] if len(parts) > 1 else ""
             handle_failed(reason)
         elif text.startswith("/skip"):
             handle_skip()
+        elif text.startswith("/add "):
+            handle_add(text[5:].strip())
+        elif text.startswith("/remove "):
+            handle_remove(text[8:].strip())
+        elif text.startswith("/finish "):
+            handle_done_task(text[8:].strip())
+        elif text == "/list":
+            handle_list()
         elif text == "/weak":
             handle_weak()
         elif text == "/streak":
             handle_streak()
         elif text == "/score":
             handle_score()
-        elif text.startswith("/journal"):
-            parts   = text.split(maxsplit=1)
-            content = parts[1] if len(parts) > 1 else ""
-            handle_journal(content)
+        elif text.startswith("/journal "):
+            handle_journal(text[9:].strip())
+        elif text in ["/help", "/start"]:
+            handle_help()
         else:
-            send_telegram(
-                "Commands:\n"
-                "/status — today's progress\n"
-                "/done 2 — log 2 tasks complete\n"
-                "/failed low energy — log a failure\n"
-                "/skip — skip today's session\n"
-                "/journal your entry | mood — log journal\n"
-                "/weak — your top failure reasons\n"
-                "/streak — streak history\n"
-                "/score — latest readiness score"
-            )
+            handle_help()
 
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -228,4 +393,4 @@ async def telegram_webhook(request: Request):
 
 @app.get("/")
 def health():
-    return {"status": "PersonalOS webhook running"}
+    return {"status": "PersonalOS — online, sir."}
