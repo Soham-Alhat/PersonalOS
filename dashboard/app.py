@@ -452,7 +452,7 @@ if not profile_df.empty and len(profile_df) > 0:
         top[["profile_key","attempts","completions","completion_rate","avg_mood"]]
         .rename(columns={
             "profile_key"    : "Slot (Day_Hour)",
-            "attempts"       : "Attempts",
+            "attempts"       : "Atcd D:tempts",
             "completions"    : "Completed",
             "completion_rate": "Rate",
             "avg_mood"       : "Avg Mood"

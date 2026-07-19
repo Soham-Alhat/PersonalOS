@@ -179,7 +179,7 @@ def handle_remove(name_fragment: str):
     send(f"🗑️ Removed from your list, sir.\n_{t['name']}_")
 
 
-def handle_list():
+def handle_delete():
     supa  = get_supabase()
     tasks = (supa.table("tasks")
              .select("*")
@@ -193,15 +193,38 @@ def handle_list():
 
     priority_order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
     tasks = sorted(tasks, key=lambda x: priority_order.get(x.get("priority", "low"), 3))
-
     icons = {"urgent": "🚨", "high": "🔴", "medium": "🟡", "low": "🟢"}
-    lines = []
-    for i, t in enumerate(tasks, 1):
-        icon     = icons.get(t.get("priority", "medium"), "🟡")
-        deadline = f" · _{t['deadline']}_" if t.get("deadline") else ""
-        lines.append(f"{i}. {icon} {t.get('name','')}{deadline}")
 
-    send(f"📋 *Your pending tasks, sir:*\n\n" + "\n".join(lines))
+    if not arg:
+        lines = []
+        for i, t in enumerate(tasks, 1):
+            icon     = icons.get(t.get("priority", "medium"), "🟡")
+            deadline = f" · _{t['deadline']}_" if t.get("deadline") else ""
+            lines.append(f"{i}. {icon} {t.get('name','')}{deadline}")
+    send(f"📋 *Your tasks, sir:*\n\n" 
+            + "\n".join(lines)
+            + "\n\n_Reply /delete 2 to remove task 2_")
+    return 
+
+    # number given — delete by index
+    if arg.isdigit():
+        index = int(arg) - 1
+        if index < 0 or index >= len(tasks):
+            send(f"No task at position {arg}, sir.")
+            return
+        t = tasks[index]
+        supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
+        send(f"🗑️ Removed: *{t['name']}*\n_Done, sir._")
+        return
+
+    # text given — delete by name fragment
+    matches = [t for t in tasks if arg.lower() in t.get("name", "").lower()]
+    if not matches:
+        send(f"Nothing matching *{arg}* on the list, sir.")
+        return
+    t = matches[0]
+    supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
+    send(f"🗑️ Removed: *{t['name']}*\n_Done, sir._")
 
 
 def handle_done_task(name_fragment: str):
@@ -323,8 +346,8 @@ def handle_help():
 
 *Tasks*
 `/add name | priority | deadline` — add a task
-`/list` — see all pending tasks
-`/remove name` — remove a task
+`/delete` — see all pending tasks
+`/delete 2` — remove task number 2
 `/finish name` — mark a task done
 
 *Intel*
@@ -371,7 +394,10 @@ async def telegram_webhook(request: Request):
         elif text.startswith("/finish "):
             handle_done_task(text[8:].strip())
         elif text == "/list":
-            handle_list()
+            handle_delete()
+        elif text == "/delete" or text.startwith("/delete"):
+            arg = text[7:].strip() if len(text) > 7 else ""
+            handle_delete(arg)
         elif text == "/weak":
             handle_weak()
         elif text == "/streak":
