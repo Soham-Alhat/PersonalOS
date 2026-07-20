@@ -3,7 +3,6 @@ import sys
 import pathlib
 import requests
 import traceback
-import uuid
 from fastapi import FastAPI, Request
 from datetime import date, datetime, timezone
 
@@ -141,9 +140,7 @@ def handle_add(text: str):
     if priority not in valid_priorities:
         priority = "medium"
 
-    task_id = str(uuid.uuid4())[:8]
     supa.table("tasks").insert({
-        "task_id"   : task_id,
         "name"      : name,
         "priority"  : priority,
         "deadline"  : deadline,
@@ -176,7 +173,7 @@ def handle_done_task(name_fragment: str):
         return
 
     t = matches[0]
-    supa.table("tasks").update({"status": "done"}).eq("task_id", t["task_id"]).execute()
+    supa.table("tasks").update({"status": "done"}).eq("id", t["id"]).execute()
     send(f"✅ *{t['name']}* — marked done.\n_Well done, sir._")
 
 
@@ -220,7 +217,7 @@ def handle_delete(arg: str = ""):
             send(f"No task at position {arg}, sir.")
             return
         t = tasks[index]
-        supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
+        supa.table("tasks").update({"status": "removed"}).eq("id", t["id"]).execute()
         send(f"🗑️ Removed: *{t['name']}*\n_Done, sir._")
         return
 
@@ -230,7 +227,7 @@ def handle_delete(arg: str = ""):
         send(f"Nothing matching *{arg}* on the list, sir.")
         return
     t = matches[0]
-    supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
+    supa.table("tasks").update({"status": "removed"}).eq("id", t["id"]).execute()
     send(f"🗑️ Removed: *{t['name']}*\n_Done, sir._")
 
 
