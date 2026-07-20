@@ -2,6 +2,7 @@ import os
 import sys
 import pathlib
 import requests
+import traceback
 import uuid
 from fastapi import FastAPI, Request
 from datetime import date, datetime, timezone
@@ -160,7 +161,7 @@ def handle_add(text: str):
     send(msg)
 
 
-def handle_remove(name_fragment: str):
+def handle_done_task(name_fragment: str):
     supa  = get_supabase()
     tasks = (supa.table("tasks")
              .select("*")
@@ -171,15 +172,20 @@ def handle_remove(name_fragment: str):
                if name_fragment.lower() in t.get("name", "").lower()]
 
     if not matches:
-        send(f"No pending task matching *{name_fragment}*, sir.")
+        send(f"No task matching *{name_fragment}* on the list, sir.")
         return
 
     t = matches[0]
-    supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
-    send(f"🗑️ Removed from your list, sir.\n_{t['name']}_")
+    supa.table("tasks").update({"status": "done"}).eq("task_id", t["task_id"]).execute()
+    send(f"✅ *{t['name']}* — marked done.\n_Well done, sir._")
 
 
-def handle_delete():
+def handle_delete(arg: str = ""):
+    """
+    /delete            -> list all pending tasks
+    /delete 2          -> remove pending task #2 (1-indexed, as shown by the list)
+    /delete some name  -> remove first pending task whose name contains the fragment
+    """
     supa  = get_supabase()
     tasks = (supa.table("tasks")
              .select("*")
@@ -195,16 +201,17 @@ def handle_delete():
     tasks = sorted(tasks, key=lambda x: priority_order.get(x.get("priority", "low"), 3))
     icons = {"urgent": "🚨", "high": "🔴", "medium": "🟡", "low": "🟢"}
 
+    # no argument — just list tasks
     if not arg:
         lines = []
         for i, t in enumerate(tasks, 1):
             icon     = icons.get(t.get("priority", "medium"), "🟡")
             deadline = f" · _{t['deadline']}_" if t.get("deadline") else ""
             lines.append(f"{i}. {icon} {t.get('name','')}{deadline}")
-    send(f"📋 *Your tasks, sir:*\n\n" 
-            + "\n".join(lines)
-            + "\n\n_Reply /delete 2 to remove task 2_")
-    return 
+        send(f"📋 *Your tasks, sir:*\n\n"
+             + "\n".join(lines)
+             + "\n\n_Reply /delete 2 to remove task 2_")
+        return
 
     # number given — delete by index
     if arg.isdigit():
@@ -225,25 +232,6 @@ def handle_delete():
     t = matches[0]
     supa.table("tasks").update({"status": "removed"}).eq("task_id", t["task_id"]).execute()
     send(f"🗑️ Removed: *{t['name']}*\n_Done, sir._")
-
-
-def handle_done_task(name_fragment: str):
-    supa  = get_supabase()
-    tasks = (supa.table("tasks")
-             .select("*")
-             .eq("status", "pending")
-             .execute()).data or []
-
-    matches = [t for t in tasks
-               if name_fragment.lower() in t.get("name", "").lower()]
-
-    if not matches:
-        send(f"No task matching *{name_fragment}* on the list, sir.")
-        return
-
-    t = matches[0]
-    supa.table("tasks").update({"status": "done"}).eq("task_id", t["task_id"]).execute()
-    send(f"✅ *{t['name']}* — marked done.\n_Well done, sir._")
 
 
 def handle_weak():
@@ -368,51 +356,63 @@ async def telegram_webhook(request: Request):
         message = body.get("message", {})
         text    = message.get("text", "").strip()
 
+        # Debug: log the exact raw text so any invisible/unexpected
+        # characters (e.g. "@BotName" suffix in groups, smart quotes from
+        # mobile autocorrect, stray whitespace) are visible in the logs.
+        print(f"Received: {repr(text)}")
+
         if not text:
             return {"ok": True}
 
-        print(f"Received: {text}")
+        # Robust command parsing:
+        # - split off the first whitespace-separated token as the command
+        # - strip a "@BotUsername" suffix Telegram appends in group chats
+        # - lowercase the command for matching, keep the remainder as-is
+        parts       = text.split(maxsplit=1)
+        command_raw = parts[0]
+        command     = command_raw.split("@")[0].lower()
+        arg_text    = parts[1].strip() if len(parts) > 1 else ""
 
-        if text == "/status":
+        print(f"Parsed command={command!r} arg={arg_text!r}")
+
+        if command == "/status":
             handle_status()
-        elif text.startswith("/done "):
-            parts  = text.split()
-            amount = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        elif command == "/done":
+            amount = int(arg_text) if arg_text.isdigit() else 1
             handle_done(amount)
-        elif text == "/done":
-            handle_done(1)
-        elif text.startswith("/failed"):
-            parts  = text.split(maxsplit=1)
-            reason = parts[1] if len(parts) > 1 else ""
-            handle_failed(reason)
-        elif text.startswith("/skip"):
+        elif command == "/failed":
+            handle_failed(arg_text)
+        elif command == "/skip":
             handle_skip()
-        elif text.startswith("/add "):
-            handle_add(text[5:].strip())
-        elif text.startswith("/remove "):
-            handle_remove(text[8:].strip())
-        elif text.startswith("/finish "):
-            handle_done_task(text[8:].strip())
-        elif text == "/list":
-            handle_delete()
-        elif text == "/delete" or text.startswith("/delete "):
-            arg = text[7:].strip() if len(text) > 7 else ""
-            handle_delete(arg)
-        elif text == "/weak":
+        elif command == "/add":
+            handle_add(arg_text)
+        elif command == "/finish":
+            handle_done_task(arg_text)
+        elif command == "/delete":
+            handle_delete(arg_text)
+        elif command == "/weak":
             handle_weak()
-        elif text == "/streak":
+        elif command == "/streak":
             handle_streak()
-        elif text == "/score":
+        elif command == "/score":
             handle_score()
-        elif text.startswith("/journal "):
-            handle_journal(text[9:].strip())
-        elif text in ["/help", "/start"]:
+        elif command == "/journal":
+            handle_journal(arg_text)
+        elif command in ["/help", "/start"]:
             handle_help()
         else:
             handle_help()
 
     except Exception as e:
+        # Log the full traceback (not just str(e)) so root causes are
+        # actually visible in Render logs, and let the user know in
+        # Telegram instead of failing silently.
         print(f"Webhook error: {e}")
+        traceback.print_exc()
+        try:
+            send(f"⚠️ Something went wrong processing that command, sir.\n_{e}_")
+        except Exception:
+            pass
 
     return {"ok": True}
 
