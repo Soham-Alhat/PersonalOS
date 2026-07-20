@@ -395,7 +395,7 @@ async def telegram_webhook(request: Request):
             handle_done_task(text[8:].strip())
         elif text == "/list":
             handle_delete()
-        elif text == "/delete" or text.startwith("/delete"):
+        elif text == "/delete" or text.startswith("/delete"):
             arg = text[7:].strip() if len(text) > 7 else ""
             handle_delete(arg)
         elif text == "/weak":
