@@ -69,6 +69,7 @@ _{remaining_txt}_""")
 def handle_done(amount: int):
     supa = get_supabase()
     now  = datetime.now(timezone.utc)
+    today = date.today()
 
     for _ in range(amount):
         supa.table("outcomes").insert({
@@ -78,11 +79,29 @@ def handle_done(amount: int):
             "logged_at"   : now.isoformat()
         }).execute()
 
+    try:
+        last_date_str = get_config("streak_last_date")
+    except Exception:
+        last_date_str = ""
+
     streak  = int(get_config("current_streak")) + 1
     longest = int(get_config("longest_streak"))
+    
+    if last_date_str > today.isoformat():
+        # already counted today - dont touch the streak, just log the task 
+        pass
+    else:
+        last_date = date.fromisformat(last_date_str) if last_date_str else None
+        if last_date == today - timedelta(days=1):
+            streak += 1
+        else:
+            streak = 1
+
+    set_config("current_streak", str(streak))
+    set_config("streak_last_date", today.isoformat())
+
     if streak > longest:
         set_config("longest_streak", str(streak))
-    set_config("current_streak", str(streak))
 
     remarks = {
         1: "One down. Onwards.",
