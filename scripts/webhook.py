@@ -4,7 +4,7 @@ import pathlib
 import requests
 import traceback
 from fastapi import FastAPI, Request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 
 sys.path.append(str(pathlib.Path(__file__).parent.parent))
 from scripts.supabase_client import get_supabase, get_config, set_config
@@ -67,8 +67,8 @@ _{remaining_txt}_""")
 
 
 def handle_done(amount: int):
-    supa = get_supabase()
-    now  = datetime.now(timezone.utc)
+    supa  = get_supabase()
+    now   = datetime.now(timezone.utc)
     today = date.today()
 
     for _ in range(amount):
@@ -79,29 +79,30 @@ def handle_done(amount: int):
             "logged_at"   : now.isoformat()
         }).execute()
 
+    # ── streak logic: advance at most once per calendar day ────────────
     try:
         last_date_str = get_config("streak_last_date")
     except Exception:
         last_date_str = ""
 
-    streak  = int(get_config("current_streak")) + 1
+    streak  = int(get_config("current_streak"))
     longest = int(get_config("longest_streak"))
-    
-    if last_date_str > today.isoformat():
-        # already counted today - dont touch the streak, just log the task 
+
+    if last_date_str == today.isoformat():
+        # already counted today — don't touch the streak, just log the task
         pass
     else:
-        last_date = date.fromisformat(last_date_str) if last_date_str else None
+        last_date = date.fromisoformat(last_date_str) if last_date_str else None
         if last_date == today - timedelta(days=1):
-            streak += 1
+            streak += 1                 # consecutive day — extend the streak
         else:
-            streak = 1
+            streak = 1                  # gap in days (or first ever) — reset to 1
 
-    set_config("current_streak", str(streak))
-    set_config("streak_last_date", today.isoformat())
+        set_config("current_streak", str(streak))
+        set_config("streak_last_date", today.isoformat())
 
-    if streak > longest:
-        set_config("longest_streak", str(streak))
+        if streak > longest:
+            set_config("longest_streak", str(streak))
 
     remarks = {
         1: "One down. Onwards.",
@@ -372,9 +373,6 @@ async def telegram_webhook(request: Request):
         message = body.get("message", {})
         text    = message.get("text", "").strip()
 
-        # Debug: log the exact raw text so any invisible/unexpected
-        # characters (e.g. "@BotName" suffix in groups, smart quotes from
-        # mobile autocorrect, stray whitespace) are visible in the logs.
         print(f"Received: {repr(text)}")
 
         if not text:
@@ -404,7 +402,7 @@ async def telegram_webhook(request: Request):
             handle_add(arg_text)
         elif command == "/finish":
             handle_done_task(arg_text)
-        elif command == "/delete":
+        elif command in ("/delete", "/list"):
             handle_delete(arg_text)
         elif command == "/weak":
             handle_weak()
@@ -420,9 +418,6 @@ async def telegram_webhook(request: Request):
             handle_help()
 
     except Exception as e:
-        # Log the full traceback (not just str(e)) so root causes are
-        # actually visible in Render logs, and let the user know in
-        # Telegram instead of failing silently.
         print(f"Webhook error: {e}")
         traceback.print_exc()
         try:
