@@ -73,9 +73,6 @@ def run():
     total       = completed + failed
     comp_rate   = round(completed / max(total, 1) * 100, 1)
 
-    moods       = [o["mood"] for o in outcomes if o.get("mood")]
-    avg_mood    = round(sum(moods) / len(moods), 1) if moods else 0
-
     failure_reasons = [o["failure_reason"] for o in outcomes if o.get("failure_reason")]
     top_failure = max(set(failure_reasons), key=failure_reasons.count) if failure_reasons else "None"
 
@@ -86,6 +83,9 @@ def run():
                     .execute())
     journal_entries = journal_resp.data or []
     days_active     = len(journal_entries)
+
+    moods = [j["mood"] for j in journal_entries if j.get("mood")]
+    avg_mood = round(sum(moods) / len(moods), 1) if moods else 0
 
     # ── streak ─────────────────────────────────────────────────────────────
     streak      = int(get_config("current_streak"))
