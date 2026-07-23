@@ -319,25 +319,36 @@ def handle_journal(text: str):
     supa  = get_supabase()
     today = date.today().isoformat()
     parts = [p.strip() for p in text.split("|")]
-    mood  = None
 
-    if len(parts) >= 2:
+    mood      = None
+    intention = None
+    entry     = parts[0]
+
+    if len(parts) >= 3:
+        intention = parts[-1]
         try:
-            mood = int(parts[-1])
-            text = "|".join(parts[:-1]).strip()
+            mood  = int(parts[-2])
+            entry = "|".join(parts[:-2]).strip()
         except ValueError:
-            pass
+            entry = "|".join(parts[:-1]).strip()
+    elif len(parts) == 2:
+        try:
+            mood = int(parts[1])
+        except ValueError:
+            entry = text
 
     supa.table("journal").upsert({
-        "entry_date": today,
-        "entry"     : text,
-        "mood"      : mood,
-        "logged_via": "telegram",
-        "logged_at" : datetime.now(timezone.utc).isoformat()
+        "entry_date"        : today,
+        "entry"             : entry,
+        "mood"              : mood,
+        "tomorrow_intention": intention,
+        "logged_via"        : "telegram",
+        "logged_at"         : datetime.now(timezone.utc).isoformat()
     }, on_conflict="entry_date").execute()
 
-    mood_line = f"\nMood logged: *{mood}/5*" if mood else ""
-    send(f"📓 Journal saved, sir.{mood_line}\n_Every entry counts._")
+    mood_line      = f"\nMood logged: *{mood}/5*" if mood else ""
+    intention_line = "\n🎯 Tomorrow's intention noted." if intention else ""
+    send(f"📓 Journal saved, sir.{mood_line}{intention_line}\n_Every entry counts._")
 
 
 def handle_help():
