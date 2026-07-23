@@ -64,6 +64,7 @@ def update_behavioral_profile():
             "completions"    : data["completions"],
             "completion_rate": round(data["completions"] / max(data["attempts"], 1), 3),
             "avg_mood"       : round(avg_mood, 2),
+            "last_updated"   : datetime.now(timezone.utc).isoformat()
         }, on_conflict="profile_key").execute()
 
     print(f"Behavioral profile updated for {len(profile_data)} slots.")
