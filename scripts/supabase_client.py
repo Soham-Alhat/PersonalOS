@@ -25,8 +25,8 @@ def get_supabase():
 
 def get_config(key: str) -> str:
     supa = get_supabase()
-    resp = supa.table("config").select("value").eq("key", key).maybesingle().execute()
-    return resp.data["value"] if resp.data else ""
+    resp = supa.table("config").select("value").eq("key", key).maybe_single().execute()
+    return resp.data["value"] if resp and resp.data else ""
 
 
 def set_config(key: str, value: str):

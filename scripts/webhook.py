@@ -86,7 +86,6 @@ def handle_done(amount: int):
         last_date_str = ""
 
     last_date_str = get_config("streak_last_date")
-
     streak  = int(get_config("current_streak"))
     longest = int(get_config("longest_streak"))
 

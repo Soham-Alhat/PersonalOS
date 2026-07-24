@@ -61,9 +61,9 @@ def run():
 
     print(f"Generating weekly report for {week_label}...")
 
-    # ── fetch outcomes from last 7 days ────────────────────────────────────
+# ── fetch outcomes from last 7 days ────────────────────────────────────
     outcomes_resp = (supa.table("outcomes")
-                     .select("result, mood, failure_reason")
+                     .select("result, failure_reason")
                      .gte("logged_at", week_ago.isoformat())
                      .execute())
     outcomes = outcomes_resp.data or []
@@ -84,7 +84,7 @@ def run():
     journal_entries = journal_resp.data or []
     days_active     = len(journal_entries)
 
-    moods = [j["mood"] for j in journal_entries if j.get("mood")]
+    moods    = [j["mood"] for j in journal_entries if j.get("mood")]
     avg_mood = round(sum(moods) / len(moods), 1) if moods else 0
 
     # ── streak ─────────────────────────────────────────────────────────────
