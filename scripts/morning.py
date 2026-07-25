@@ -26,14 +26,18 @@ def get_telegram_creds():
     return token, chat_id
 
 
-def send_telegram(message: str):
+def send_telegram(message: str, reply_markup: dict = None):
     token, chat_id = get_telegram_creds()
     url  = f"https://api.telegram.org/bot{token}/sendMessage"
-    resp = requests.post(url, json={
+    payload = {
         "chat_id"    : chat_id,
         "text"       : message,
         "parse_mode" : "Markdown"
-    })
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    resp = requests.post(url, json=payload)
     if resp.status_code == 200:
         print("Telegram message sent.")
     else:
@@ -137,7 +141,13 @@ def run():
     print(message)
     print("----------------------\n")
 
-    send_telegram(message)
+    inline_keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ Mark today's first task done", "callback_data": "done_1"}
+        ]]
+    }
+
+    send_telegram(message, reply_markup=inline_keyboard)
 
 
 if __name__ == "__main__":
