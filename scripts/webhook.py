@@ -27,11 +27,42 @@ def get_telegram_creds():
     return token, chat_id
 
 
-def send(message: str):
+def get_main_keyboard():
+    """Persistent reply keyboard — top actions that need no free-text input."""
+    return {
+        "keyboard": [
+            ["✅ Done", "❌ Failed"],
+            ["📋 Tasks", "🔥 Streak"],
+            ["📊 Status", "❓ Help"]
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True
+    }
+
+
+def send(message: str, keyboard: bool = True):
+    """
+    Send a Telegram message. Attaches the persistent reply keyboard by
+    default on every bot reply, so it survives regardless of what the
+    user does — pass keyboard=False only if you need a bare message.
+    """
     token, chat_id = get_telegram_creds()
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+    if keyboard:
+        payload["reply_markup"] = get_main_keyboard()
     requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+        json=payload
+    )
+
+
+def answer_callback(callback_query_id: str, text: str = ""):
+    """Clears the loading spinner on an inline button tap, optionally
+    showing a small toast notification."""
+    token, _ = get_telegram_creds()
+    requests.post(
+        f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+        json={"callback_query_id": callback_query_id, "text": text}
     )
 
 
@@ -81,18 +112,17 @@ def handle_done(amount: int):
 
     # ── streak logic: advance at most once per calendar day ────────────
     last_date_str = get_config("streak_last_date")
-    streak  = int(get_config("current_streak"))
-    longest = int(get_config("longest_streak"))
+    streak        = int(get_config("current_streak"))
+    longest       = int(get_config("longest_streak"))
 
     if last_date_str == today.isoformat():
-        # already counted today — don't touch the streak, just log the task
         pass
     else:
         last_date = date.fromisoformat(last_date_str) if last_date_str else None
         if last_date == today - timedelta(days=1):
-            streak += 1                 # consecutive day — extend the streak
+            streak += 1
         else:
-            streak = 1                  # gap in days (or first ever) — reset to 1
+            streak = 1
 
         set_config("current_streak", str(streak))
         set_config("streak_last_date", today.isoformat())
@@ -214,7 +244,6 @@ def handle_delete(arg: str = ""):
     tasks = sorted(tasks, key=lambda x: priority_order.get(x.get("priority", "low"), 3))
     icons = {"urgent": "🚨", "high": "🔴", "medium": "🟡", "low": "🟢"}
 
-    # no argument — just list tasks
     if not arg:
         lines = []
         for i, t in enumerate(tasks, 1):
@@ -226,7 +255,6 @@ def handle_delete(arg: str = ""):
              + "\n\n_Reply /delete 2 to remove task 2_")
         return
 
-    # number given — delete by index
     if arg.isdigit():
         index = int(arg) - 1
         if index < 0 or index >= len(tasks):
@@ -237,7 +265,6 @@ def handle_delete(arg: str = ""):
         send(f"🗑️ Removed: *{t['name']}*\n_Done, sir._")
         return
 
-    # text given — delete by name fragment
     matches = [t for t in tasks if arg.lower() in t.get("name", "").lower()]
     if not matches:
         send(f"Nothing matching *{arg}* on the list, sir.")
@@ -323,13 +350,15 @@ def handle_journal(text: str):
     if len(parts) >= 3:
         intention = parts[-1]
         try:
-            mood  = int(parts[-2])
+            candidate = int(parts[-2])
+            mood  = candidate if 1 <= candidate <= 5 else None
             entry = "|".join(parts[:-2]).strip()
         except ValueError:
             entry = "|".join(parts[:-1]).strip()
     elif len(parts) == 2:
         try:
-            mood = int(parts[1])
+            candidate = int(parts[1])
+            mood = candidate if 1 <= candidate <= 5 else None
         except ValueError:
             entry = text
 
@@ -342,7 +371,9 @@ def handle_journal(text: str):
         "logged_at"         : datetime.now(timezone.utc).isoformat()
     }, on_conflict="entry_date").execute()
 
-    mood_line      = f"\nMood logged: *{mood}/5*" if mood else ""
+    mood_line      = (f"\nMood logged: *{mood}/5*" if mood
+                       else "\n_Mood not logged — use a number 1–5._" if len(parts) >= 2
+                       else "")
     intention_line = "\n🎯 Tomorrow's intention noted." if intention else ""
     send(f"📓 Journal saved, sir.{mood_line}{intention_line}\n_Every entry counts._")
 
@@ -350,11 +381,14 @@ def handle_journal(text: str):
 def handle_help():
     send("""🤵 *At your service, sir.*
 
-*Logging*
+*Quick actions* — tap a button below 👇
+✅ Done · ❌ Failed · 📋 Tasks · 🔥 Streak · 📊 Status
+
+*Typed commands*
 `/done 2` — log 2 tasks complete
 `/failed low energy` — log a failure
 `/skip` — skip today's session
-`/journal your entry | mood` — log your day
+`/journal your entry | mood | tomorrow's intention` — log your day
 
 *Tasks*
 `/add name | priority | deadline` — add a task
@@ -371,12 +405,46 @@ def handle_help():
 _Priority options: urgent · high · medium · low_""")
 
 
+# ── QUICK-ACTION BUTTON MAP ──────────────────────────────────────────────
+# Maps the exact label text sent by the persistent reply keyboard to the
+# handler it should trigger. Case-insensitive match against the raw text.
+BUTTON_MAP = {
+    "✅ done"   : lambda: handle_done(1),
+    "❌ failed" : lambda: handle_failed(""),
+    "📋 tasks"  : lambda: handle_delete(""),
+    "🔥 streak" : lambda: handle_streak(),
+    "📊 status" : lambda: handle_status(),
+    "❓ help"   : lambda: handle_help(),
+}
+
+
 # ── ROUTER ─────────────────────────────────────────────────────────────────
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     try:
-        body    = await request.json()
+        body = await request.json()
+
+        # ── inline button tap (morning briefing "Mark done" button) ────
+        if "callback_query" in body:
+            cq          = body["callback_query"]
+            data        = cq.get("data", "")
+            callback_id = cq.get("id", "")
+
+            print(f"Callback received: {data!r}")
+
+            if data == "done_1":
+                handle_done(1)
+                answer_callback(callback_id, "Logged ✅")
+            elif data == "failed":
+                handle_failed("")
+                answer_callback(callback_id, "Logged 📝")
+            else:
+                answer_callback(callback_id)
+
+            return {"ok": True}
+
+        # ── normal text message ──────────────────────────────────────────
         message = body.get("message", {})
         text    = message.get("text", "").strip()
 
@@ -385,10 +453,13 @@ async def telegram_webhook(request: Request):
         if not text:
             return {"ok": True}
 
-        # Robust command parsing:
-        # - split off the first whitespace-separated token as the command
-        # - strip a "@BotUsername" suffix Telegram appends in group chats
-        # - lowercase the command for matching, keep the remainder as-is
+        # ── reply-keyboard button tap ───────────────────────────────────
+        button_action = BUTTON_MAP.get(text.lower())
+        if button_action:
+            button_action()
+            return {"ok": True}
+
+        # ── slash command parsing ───────────────────────────────────────
         parts       = text.split(maxsplit=1)
         command_raw = parts[0]
         command     = command_raw.split("@")[0].lower()
